@@ -30,11 +30,8 @@ def create_train_data():
         img = cv2.imread(os.path.join(train_data_path, image_name), cv2.IMREAD_GRAYSCALE)
         img_mask = cv2.imread(os.path.join(train_data_path, image_mask_name), cv2.IMREAD_GRAYSCALE)
 
-        img = np.array([img])
-        img_mask = np.array([img_mask])
-
-        imgs[i] = img
-        imgs_mask[i] = img_mask
+        imgs[i] = img[None, ...]     # Add channel dimension
+        imgs_mask[i] = img_mask[None, ...]
 
         if i % 100 == 0:
             print('Done: {0}/{1} images'.format(i, total))
@@ -54,7 +51,7 @@ def load_train_data():
 
 def create_test_data():
     train_data_path = os.path.join(data_path, 'test')
-    images = os.listdir(train_data_path)
+    images = filter(lambda f: f[-4:] == '.tif', os.listdir(train_data_path))
     total = len(images)
 
     imgs = np.ndarray((total, 1, image_rows, image_cols), dtype=np.uint8)
@@ -68,9 +65,7 @@ def create_test_data():
         img_id = int(image_name.split('.')[0])
         img = cv2.imread(os.path.join(train_data_path, image_name), cv2.IMREAD_GRAYSCALE)
 
-        img = np.array([img])
-
-        imgs[i] = img
+        imgs[i] = img[None, ...]
         imgs_id[i] = img_id
 
         if i % 100 == 0:

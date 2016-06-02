@@ -3,9 +3,9 @@ from __future__ import print_function
 import cv2
 import numpy as np
 from keras.models import Model
-from keras.layers import Input, merge, Convolution2D, MaxPooling2D, UpSampling2D
+from keras.layers import Input, merge, Convolution2D, MaxPooling2D, UpSampling2D, Dense, Flatten, RepeatVector
 from keras.optimizers import Adam
-from keras.callbacks import ModelCheckpoint, LearningRateScheduler
+from keras.callbacks import ModelCheckpoint, LearningRateScheduler, RemoteMonitor
 from keras import backend as K
 
 from data import load_train_data, load_test_data
@@ -47,6 +47,12 @@ def get_unet():
     conv5 = Convolution2D(512, 3, 3, activation='relu', border_mode='same')(pool4)
     conv5 = Convolution2D(512, 3, 3, activation='relu', border_mode='same')(conv5)
 
+    pool5 = MaxPooling2D(pool_size=(2, 2))(conv5)
+    poll5_flat = Flatten()(pool5)
+    dense1 = Dense(1024, activation='relu')(poll5_flat)
+    dense2 = Dense(512, activation='relu')(dense1)
+    dense3 = Dense(1, activation='sigmoid', name='has_mask_output')(dense1)
+
     up6 = merge([UpSampling2D(size=(2, 2))(conv5), conv4], mode='concat', concat_axis=1)
     conv6 = Convolution2D(256, 3, 3, activation='relu', border_mode='same')(up6)
     conv6 = Convolution2D(256, 3, 3, activation='relu', border_mode='same')(conv6)
@@ -65,9 +71,19 @@ def get_unet():
 
     conv10 = Convolution2D(1, 1, 1, activation='sigmoid')(conv9)
 
-    model = Model(input=inputs, output=conv10)
+    conv10_flat = Flatten()(conv10)
 
-    model.compile(optimizer=Adam(lr=1e-5), loss=dice_coef_loss, metrics=[dice_coef])
+    dense3_repeat = Flatten()(RepeatVector(img_rows * img_cols)(dense3))
+
+    merge_output = merge([conv10_flat, dense3_repeat], mode='mul')
+
+    out = Reshape((1, img_rows, img_cols), name='main_output')(merge_output)
+
+    model = Model(input=inputs, output=[out, dense3])
+
+    model.compile(optimizer=Adam(lr=1e-5),
+        loss={'main_output': dice_coef_loss, 'has_mask_output': 'binary_crossentropy'},
+        metrics={'main_output': dice_coef, 'has_mask_output': 'accuracy'})
 
     return model
 
@@ -98,17 +114,20 @@ def train_and_predict():
     imgs_mask_train = imgs_mask_train.astype('float32')
     imgs_mask_train /= 255.  # scale masks to [0, 1]
 
+    imgs_has_mask_train = (imgs_mask_train.reshape(imgs_mask_train.shape[0], -1).max(axis=1) > 0) * 1
+
     print('-'*30)
     print('Creating and compiling model...')
     print('-'*30)
     model = get_unet()
     model_checkpoint = ModelCheckpoint('unet.hdf5', monitor='loss', save_best_only=True)
+    remote_monitor = RemoteMonitor(root='http://localhost:9000')
 
     print('-'*30)
     print('Fitting model...')
     print('-'*30)
-    model.fit(imgs_train, imgs_mask_train, batch_size=32, nb_epoch=20, verbose=1, shuffle=True,
-              callbacks=[model_checkpoint])
+    model.fit(imgs_train, [imgs_mask_train, imgs_has_mask_train], batch_size=32, nb_epoch=20, verbose=1, shuffle=True,
+              callbacks=[model_checkpoint, remote_monitor])
 
     print('-'*30)
     print('Loading and preprocessing test data...')
@@ -128,7 +147,7 @@ def train_and_predict():
     print('-'*30)
     print('Predicting masks on test data...')
     print('-'*30)
-    imgs_mask_test = model.predict(imgs_test, verbose=1)
+    imgs_mask_test = model.predict(imgs_test, verbose=1)[0]  # Get output only for first output
     np.save('imgs_mask_test.npy', imgs_mask_test)
 
 
